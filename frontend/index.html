@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="el">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Amazon Price Tracker</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>Amazon Price Tracker 🎯</h1>
+        <p>Βάλε το link του προϊόντος και την τιμή που επιθυμείς.</p>
+
+        <form id="tracker-form">
+            <div class="form-group">
+                <label for="url">Amazon Product URL:</label>
+                <input type="url" id="url" required placeholder="https://www.amazon.com/...">
+            </div>
+
+            <div class="form-group">
+                <label for="price">Τιμή Στόχος (€):</label>
+                <input type="number" id="price" step="0.01" required placeholder="π.χ. 50.00">
+            </div>
+
+            <div class="form-group">
+                <label for="email">Το Email σου:</label>
+                <input type="email" id="email" required placeholder="example@gmail.com">
+            </div>
+
+            <button type="submit">Έναρξη Παρακολούθησης</button>
+        </form>
+
+        <!-- Εδώ θα εμφανίζουμε τα μηνύματα επιτυχίας ή σφάλματος -->
+        <div id="message-box" class="hidden"></div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
