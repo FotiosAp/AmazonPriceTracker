@@ -1,52 +1,106 @@
-import smtplib
-import os
-from dotenv import load_dotenv
-from bs4 import BeautifulSoup
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from data_base import add_data,get_data
+from fastapi.middleware.cors import CORSMiddleware
+
 import requests
-from pprint import pprint
-load_dotenv()
-smtp_address=os.environ.get("SMTP_ADDRESS")
-usn_email=os.environ.get("USN")
-password=os.environ.get("PSW")
-sender_email=os.environ.get("SENDER")
-# site_url='https://appbrewery.github.io/instant_pot/'
-site_url="https://www.amazon.com/Instant-Pot-Multi-Use-Programmable-Pressure/dp/B00FLYWNYQ/ref=dp_fod_d_sccl_2/143-0701800-5214710?pd_rd_w=L0fXE&content-id=amzn1.sym.c9fb9865-4d2c-4ceb-ba49-da7c55243c76&pf_rd_p=c9fb9865-4d2c-4ceb-ba49-da7c55243c76&pf_rd_r=9T7765NRA01YQMW79BSF&pd_rd_wg=DBkIz&pd_rd_r=c324bbf1-2a46-4497-9aff-6ea94b12c38c&pd_rd_i=B00FLYWNYQ&psc=1"
-my_headers = {
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-    "Accept-Encoding": "gzip, deflate, br, zstd",
-    "Accept-Language": "el,en;q=0.9",
-    "Priority": "u=0, i",
-    "Referer": "https://httpbin.org/legacy",
-    "Sec-Ch-Ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
-    "Sec-Ch-Ua-Mobile": "?0",
-    "Sec-Ch-Ua-Platform": "\"Windows\"",
-    "Sec-Fetch-Dest": "document",
-    "Sec-Fetch-Mode": "navigate",
-    "Sec-Fetch-Site": "same-origin",
-    "Sec-Fetch-User": "?1",
-    "Upgrade-Insecure-Requests": "1",
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
-    "X-Amzn-Trace-Id": "Root=1-6adce3d7-664fe92f2439179918f73412"
-}
-response = requests.get(site_url,headers=my_headers)
-# print(response.status_code)
-webpage=response.text
-soup = BeautifulSoup(webpage, 'html.parser')
-# pprint(soup)
-# price=soup.find('p', class_='a-spacing-none a-text-left a-size-mini twisterSwatchPrice').text
-price = soup.find("span",class_="a-offscreen").get_text()
-prices_list=price.split("EUR")
-product_price=float(prices_list[1])
-product_title = " ".join(soup.select_one("#productTitle").getText().split())
-print(product_title)
-print(product_price)
-if product_price<100:
-    with smtplib.SMTP(smtp_address,587) as smtp:
+from bs4 import BeautifulSoup
+import smtplib
+from scraper_worker import my_headers, USN_EMAIL, password, smtp_address
+
+app = FastAPI()
+
+# Προσθήκη του CORS Middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Επιτρέπει στο frontend (από οποιαδήποτε πόρτα) να μιλήσει στο API
+    allow_credentials= True,
+    allow_methods=["*"],  # Επιτρέπει GET, POST κλπ.
+    allow_headers=["*"],
+)
+
+
+class Product(BaseModel):
+    product_url: str
+    target_price: float
+    user_email: str
+
+
+def send_welcome_email(product_title, current_price, target_price, product_url, receiver_email):
+    with smtplib.SMTP(smtp_address, 587) as smtp:
         smtp.starttls()
-        smtp.login(usn_email,password)
-        smtp.sendmail(from_addr=usn_email,
-                      to_addrs=sender_email,
-                      msg=f"Subject:Price Alert\n\n{product_title}\n{product_price}$\n{site_url}".encode("utf-8")
-                      )
-else:
-    print("High price")
+        smtp.login(USN_EMAIL, password)
+
+        subject = "Επιτυχης Εναρξη Παρακολουθησης Τιμης!"
+        body = (f"Γεια σου!\n\n"
+                f"Ξεκινήσαμε την παρακολούθηση για το προϊόν:\n{product_title}\n\n"
+                f"Τρέχουσα Τιμή: {current_price} EUR\n"
+                f"Ο Στόχος σου: {target_price} EUR\n\n"
+                f"Θα λάβεις νεότερο email μόνο όταν η τιμή πέσει κάτω από το στόχο σου.\n"
+                f"Link: {product_url}")
+
+        msg = f"Subject: {subject}\n\n{body}".encode("utf-8")
+        smtp.sendmail(from_addr=USN_EMAIL, to_addrs=receiver_email, msg=msg)
+
+
+@app.post("/", response_model=Product)
+def add_product(product: Product):
+    # 1. Κάνουμε μια γρήγορη "επίσκεψη" στο Amazon για να πάρουμε τα 2 στοιχεία που μας λείπουν
+    try:
+        response = requests.get(product.product_url, headers=my_headers)
+        soup = BeautifulSoup(response.text, 'html.parser')
+
+        # Βρίσκουμε την τρέχουσα τιμή και τον τίτλο
+        price_text = soup.find("span", class_="a-offscreen").get_text()
+        current_price = float(price_text.split("EUR")[1])
+        product_title = " ".join(soup.select_one("#productTitle").getText().split())
+
+        # 2. ΤΩΡΑ καλούμε τη συνάρτηση του email.
+        # Της δίνουμε τον τίτλο/τιμή που μόλις βρήκαμε, και τα URL/Target/Email που έβαλε ο χρήστης στη φόρμα (product.κάτι)
+        send_welcome_email(product_title,current_price,product.target_price,product.product_url,product.user_email
+        )
+    except Exception as e:
+        print(f"Το scraping ή το email απέτυχε κατά την εγγραφή: {e}")
+        # Αν πέσει το ίντερνετ ή το Amazon, προχωράμε κανονικά για να μη χάσουμε την εγγραφή
+
+    # 3. Αποθήκευση στη βάση δεδομένων (Supabase)
+    add_data(product.product_url, product.target_price, product.user_email)
+
+    return product
+
+# @app.post("/", response_model=Product)
+# def add_product(product: Product):
+#     add_data(product.product_url,product.target_price,product.user_email)
+#     return product
+
+@app.get("/get_items",response_model=list[Product])
+def get_item():
+    data=get_data()
+    print(data)
+    return data
+
+
+# class Item(BaseModel):
+#     text: str = None
+#     is_done: bool= False
+#
+# items=[]
+# @app.get("/")
+# def root():
+#     return {"message": "Hello World"}
+#
+# @app.post("/items")
+# def create_item(item: Item):
+#     items.append(item)
+#     return items
+#
+# @app.get("/items", response_model=list[Item])
+# def list_items(limit: int = 10):
+#     return items[0:limit]
+#
+# @app.get("/items/{item_id}", response_model=Item)
+# def read_item(item_id: int)-> Item:
+#     if item_id< len(items):
+#         return items[item_id]
+#     else:
+#         raise HTTPException(status_code=404, detail=f"Item {item_id} not found")
